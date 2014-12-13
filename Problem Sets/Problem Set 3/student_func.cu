@@ -79,7 +79,37 @@
 
 */
 
+#include <cuda_runtime.h>
 #include "utils.h"
+
+__global__
+void reduce_max(float* d_out, const float* d_in)
+{
+    extern __shared__ float shared_data[];
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
+    const int threadId  = threadIdx.x;
+
+    shared_data[threadId] = d_in[myIndex];
+    __syncthreads();
+
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>=1)
+    {
+        if (threadId < stride)
+        {
+            if (shared_data[threadId] < shared_data[threadId + stride])
+            {
+                shared_data[threadId] = shared_data[threadId + stride];
+            }
+        }
+        __syncthreads();
+    }
+
+    if (threadId == 0)
+    {
+        d_out[blockIdx.x] = shared_data[0]; // copy result
+    }
+}
+
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
@@ -101,4 +131,41 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
        incoming d_cdf pointer which already has been allocated for you)       */
 
 
+    // Step 1: find the min and max values.
+    const size_t numPixels = numRows * numCols;
+    const int numThreads = 1024;
+
+    const dim3 blockSize(numThreads);
+    const dim3 gridSize((numPixels + numThreads + 1)/numThreads);
+
+    float* d_max_logLum = NULL;
+    cudaMalloc((void**) &d_max_logLum, sizeof(float));
+    cudaMemcpy(d_max_logLum, &max_logLum, sizeof(float), cudaMemcpyHostToDevice);
+
+    float* d_intermediate = NULL;
+    cudaMalloc((void**) &d_intermediate, numThreads * sizeof(float));
+
+    reduce_max<<<gridSize, blockSize, numThreads * sizeof(float)>>>(d_intermediate, d_logLuminance);
+
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    // Final reduce into a single results
+    const dim3 final_blocks(1);
+    const dim3 final_threads(gridSize);
+    reduce_max<<<final_blocks, final_threads, numThreads * sizeof(float)>>>(d_max_logLum, d_intermediate);
+
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    // Copy results back to host
+    cudaMemcpy(&max_logLum, d_max_logLum, sizeof(float), cudaMemcpyDeviceToHost);
+
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    cudaFree(d_intermediate);
+    d_intermediate = NULL;
+    cudaFree(d_max_logLum);
+    d_max_logLum = NULL;
 }
