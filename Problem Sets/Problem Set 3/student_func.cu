@@ -111,6 +111,35 @@ void reduce_max(float* d_out, const float* d_in)
 }
 
 
+__global__
+void reduce_min(float* d_out, const float* d_in)
+{
+    extern __shared__ float shared_data[];
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
+    const int threadId  = threadIdx.x;
+
+    shared_data[threadId] = d_in[myIndex];
+    __syncthreads();
+
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>=1)
+    {
+        if (threadId < stride)
+        {
+            if (shared_data[threadId] > shared_data[threadId + stride])
+            {
+                shared_data[threadId] = shared_data[threadId + stride];
+            }
+        }
+        __syncthreads();
+    }
+
+    if (threadId == 0)
+    {
+        d_out[blockIdx.x] = shared_data[0]; // copy result
+    }
+}
+
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -138,14 +167,20 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     const dim3 blockSize(numThreads);
     const dim3 gridSize((numPixels + numThreads + 1)/numThreads);
 
+    float* d_min_logLum = NULL;
+    cudaMalloc((void**) &d_min_logLum, sizeof(float));
     float* d_max_logLum = NULL;
     cudaMalloc((void**) &d_max_logLum, sizeof(float));
-    cudaMemcpy(d_max_logLum, &max_logLum, sizeof(float), cudaMemcpyHostToDevice);
+    //cudaMemcpy(d_max_logLum, &max_logLum, sizeof(float), cudaMemcpyHostToDevice);
 
     float* d_intermediate = NULL;
     cudaMalloc((void**) &d_intermediate, numThreads * sizeof(float));
+    
+    //
+    // Calculate the Minimum
+    //
 
-    reduce_max<<<gridSize, blockSize, numThreads * sizeof(float)>>>(d_intermediate, d_logLuminance);
+    reduce_min<<<gridSize, blockSize, numThreads * sizeof(float)>>>(d_intermediate, d_logLuminance);
 
     // Check all is ok
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
@@ -153,6 +188,27 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     // Final reduce into a single results
     const dim3 final_blocks(1);
     const dim3 final_threads(gridSize);
+    reduce_max<<<final_blocks, final_threads, numThreads * sizeof(float)>>>(d_min_logLum, d_intermediate);
+
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    // Copy results back to host
+    cudaMemcpy(&min_logLum, d_min_logLum, sizeof(float), cudaMemcpyDeviceToHost);
+
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //
+    // Calculate the Maximum
+    //
+    
+    reduce_max<<<gridSize, blockSize, numThreads * sizeof(float)>>>(d_intermediate, d_logLuminance);
+
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    // Final reduce into a single results
     reduce_max<<<final_blocks, final_threads, numThreads * sizeof(float)>>>(d_max_logLum, d_intermediate);
 
     // Check all is ok
