@@ -189,7 +189,6 @@ void cumulativeDistribution(unsigned int* const d_cdf, const unsigned int* d_bin
     if (myIndex == 0)
     {
         shared_data2[maxIndex] = 0;
-        printf("blockDim.x = %d\n", blockDim.x);
     }
     
     __syncthreads();
