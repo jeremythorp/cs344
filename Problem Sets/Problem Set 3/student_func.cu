@@ -140,6 +140,16 @@ void reduce_min(float* d_out, const float* d_in)
 }
 
 
+__global__
+void histogram(int* d_bins, const float* d_in, float lumMin, float lumRange, const int numBins)
+{
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
+    float value = d_in[myIndex];
+    int myBin = (value - lumMin) / lumRange * numBins;
+    atomicAdd(&(d_bins[myBin]), 1);
+}
+
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -220,6 +230,31 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     // Check all is ok
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
+    //
+    // Calculate the luminance range
+    //
+
+    const float intensityRange = max_logLum - min_logLum;
+
+    // 
+    // Calculate the histogram
+    //
+    int binSizeBytes = numBins * sizeof(int);
+    int* d_bins = NULL;
+    cudaMalloc((void**) &d_bins, binSizeBytes);
+    cudaMemset(d_bins, 0, binSizeBytes);
+
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    histogram<<<gridSize, blockSize>>>(d_bins, d_logLuminance, min_logLum, intensityRange, numBins);
+    
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    // Free up the CUDA device memory
+    cudaFree(d_bins);
+    d_bins = NULL;
     cudaFree(d_intermediate);
     d_intermediate = NULL;
     cudaFree(d_max_logLum);
