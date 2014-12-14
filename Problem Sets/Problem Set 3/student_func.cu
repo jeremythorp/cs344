@@ -141,13 +141,79 @@ void reduce_min(float* d_out, const float* d_in)
 
 
 __global__
-void histogram(int* d_bins, const float* d_in, float lumMin, float lumRange, const int numBins)
+void histogram(unsigned int* d_bins, const float* d_in, float lumMin, float lumRange, const int numBins)
 {
     const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
     float value = d_in[myIndex];
     int myBin = (value - lumMin) / lumRange * numBins;
     atomicAdd(&(d_bins[myBin]), 1);
 }
+
+__global__
+void cumulativeDistribution(unsigned int* const d_cdf, const unsigned int* d_bins)
+{
+    extern __shared__ unsigned int shared_data2[];
+    const int myIndex = threadIdx.x;
+
+    shared_data2[myIndex] = d_bins[myIndex];
+    __syncthreads();
+
+    //
+    // Use a Blelloch scan algorithm
+    //
+
+    // Reduce step
+
+    const unsigned numBins = blockDim.x;
+    const unsigned int maxIndex = numBins - 1;
+    unsigned int offset = 1;
+
+    for (unsigned int operations = numBins / 2; operations > 0; operations >>=1)
+    {
+        if (myIndex < operations)
+        {
+            unsigned int firstIndex  = offset * (2 * myIndex + 1) - 1;
+            unsigned int secondIndex = offset * (2 * myIndex + 2) - 1;
+            shared_data2[secondIndex] += shared_data2[firstIndex];
+        }
+
+        offset *= 2;
+        __syncthreads();
+    }
+
+
+    //shared_data2[8] = offset;
+
+    // Downsweep step
+
+    if (myIndex == 0)
+    {
+        shared_data2[maxIndex] = 0;
+        printf("blockDim.x = %d\n", blockDim.x);
+    }
+    
+    __syncthreads();
+
+    for (unsigned int operations = 1; operations <= (numBins / 2); operations <<=1)
+    {
+        offset >>= 1;
+
+        if (myIndex < operations)
+        {
+            unsigned int firstIndex  = offset * (2 * myIndex + 1) - 1;
+            unsigned int secondIndex = offset * (2 * myIndex + 2) - 1;
+
+            unsigned int temp = shared_data2[firstIndex];
+            shared_data2[firstIndex]  = shared_data2[secondIndex];
+            shared_data2[secondIndex] += temp;
+        }
+
+        __syncthreads();
+    }
+
+    d_cdf[myIndex] = shared_data2[myIndex];
+}
+
 
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
@@ -239,8 +305,9 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     // 
     // Calculate the histogram
     //
-    int binSizeBytes = numBins * sizeof(int);
-    int* d_bins = NULL;
+
+    unsigned int binSizeBytes = numBins * sizeof(int);
+    unsigned int* d_bins = NULL;
     cudaMalloc((void**) &d_bins, binSizeBytes);
     cudaMemset(d_bins, 0, binSizeBytes);
 
@@ -251,6 +318,30 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     
     // Check all is ok
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    // take a look at the histogram
+    unsigned int h_histo[1024];
+ 
+    cudaMemcpy(&h_histo, d_bins, binSizeBytes, cudaMemcpyDeviceToHost);
+
+    //
+    // Calculate the cumulative distribution
+    //
+
+    cudaMemset(d_cdf, 0, binSizeBytes);
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    cumulativeDistribution<<<1, numBins, numBins * sizeof(unsigned int)>>>(d_cdf, d_bins); 
+    
+    // Check all is ok
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    // take a look at the cfd
+    unsigned int h_cdf[1024];
+ 
+    cudaMemcpy(&h_cdf, d_cdf, binSizeBytes, cudaMemcpyDeviceToHost);
+
 
     // Free up the CUDA device memory
     cudaFree(d_bins);
