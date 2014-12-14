@@ -145,7 +145,7 @@ void histogram(unsigned int* d_bins, const float* d_in, float lumMin, float lumR
 {
     const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
     float value = d_in[myIndex];
-    int myBin = (value - lumMin) / lumRange * numBins;
+    int myBin = ((value - lumMin) / lumRange) * (float) numBins;
     atomicAdd(&(d_bins[myBin]), 1);
 }
 
@@ -240,7 +240,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     const int numThreads = 1024;
 
     const dim3 blockSize(numThreads);
-    const dim3 gridSize((numPixels + numThreads + 1)/numThreads);
+    const dim3 gridSize((numPixels + numThreads - 1)/numThreads);
 
     float* d_min_logLum = NULL;
     cudaMalloc((void**) &d_min_logLum, sizeof(float));
@@ -263,7 +263,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     // Final reduce into a single results
     const dim3 final_blocks(1);
     const dim3 final_threads(gridSize);
-    reduce_max<<<final_blocks, final_threads, numThreads * sizeof(float)>>>(d_min_logLum, d_intermediate);
+    reduce_min<<<final_blocks, final_threads, numThreads * sizeof(float)>>>(d_min_logLum, d_intermediate);
 
     // Check all is ok
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
