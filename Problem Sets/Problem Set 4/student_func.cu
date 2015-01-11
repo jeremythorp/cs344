@@ -42,14 +42,12 @@
 
  */
 
-
-
 __global__
-void nibbleHistogram(unsigned int* d_bins, unsigned int* const d_inputVals, const unsigned int nibbleShift)
+void histogram(unsigned int* d_bins, unsigned int* const d_inputVals, const unsigned int shift, const unsigned int mask)
 {
     const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
     unsigned int value = d_inputVals[myIndex];
-    unsigned int myBin = (value >>  nibbleShift) & 0xf;
+    unsigned int myBin = (value >> shift) & mask;
     atomicAdd(&(d_bins[myBin]), 1);
 }
 
@@ -86,8 +84,6 @@ void cumulativeDistribution(unsigned int* const d_cdf, const unsigned int* d_bin
         __syncthreads();
     }
 
-
-    //shared_data2[8] = offset;
 
     // Downsweep step
 
@@ -137,15 +133,16 @@ void your_sort(unsigned int* const d_inputVals,
     const dim3 blockSize(numThreads);
     const dim3 gridSize(numElems / numThreads);
 
-    const unsigned int nibbleSize = 4;
-    const unsigned int numBins = 2 << nibbleSize;
+    const unsigned int shiftSize = 8;
+    const unsigned int numBins = 1 << shiftSize;
+    const unsigned int mask = (1 << shiftSize) - 1;
 
-    unsigned int binSizeBytes = numBins * sizeof(int);
+    unsigned int binSizeBytes = numBins * sizeof(unsigned int);
     unsigned int* d_bins = NULL;
     cudaMalloc((void**) &d_bins, binSizeBytes);
     cudaMemset(d_bins, 0, binSizeBytes);
 
-    unsigned int cdfSizeBytes = numBins * sizeof(int);
+    unsigned int cdfSizeBytes = numBins * sizeof(unsigned int);
     unsigned int* d_cdf = NULL;
     cudaMalloc((void**) &d_cdf, cdfSizeBytes);
     cudaMemset(d_bins, 0, cdfSizeBytes);
@@ -153,9 +150,9 @@ void your_sort(unsigned int* const d_inputVals,
     // Check all is ok
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-    const unsigned int numPasses = 8 * sizeof(unsigned int) / 4;
+    const unsigned int numPasses = 8 * sizeof(unsigned int) / shiftSize;
 
-    unsigned int nibbleShift = 0;
+    unsigned int shift = 0;
 
     for (int pass = 0; pass < numPasses; pass++)
     {
@@ -163,7 +160,9 @@ void your_sort(unsigned int* const d_inputVals,
         // (1) Calculate the histogram
         //
 
-        nibbleHistogram<<<gridSize, blockSize>>>(d_bins, d_inputVals, nibbleShift);
+        cudaMemset(d_bins, 0, binSizeBytes);
+
+        histogram<<<gridSize, blockSize>>>(d_bins, d_inputVals, shift, mask);
         
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
@@ -178,10 +177,14 @@ void your_sort(unsigned int* const d_inputVals,
         //
 
         cudaMemset(d_cdf, 0, cdfSizeBytes);
+
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
         cumulativeDistribution<<<1, numBins, numBins * sizeof(unsigned int)>>>(d_cdf, d_bins); 
+
+        // Check all is ok
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
         // take a look at the cfd
         unsigned int h_cdf[numBins];
@@ -197,7 +200,7 @@ void your_sort(unsigned int* const d_inputVals,
         //     location for each element and move it there)
         //
 
-        nibbleShift += nibbleSize;
+        shift += shiftSize;
     }
 
     // Free up the CUDA device memory
