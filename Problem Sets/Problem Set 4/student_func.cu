@@ -3,6 +3,7 @@
 
 #include "utils.h"
 #include <thrust/host_vector.h>
+#include <vector>
 
 /* Red Eye Removal
    ===============
@@ -115,12 +116,79 @@ void cumulativeDistribution(unsigned int* const d_cdf, const unsigned int* d_bin
 }
 
 
+class sort_element
+{
+public:
+    sort_element(const unsigned int value, const unsigned int position);
+    unsigned int GetValue() const    { return m_value;    } ;
+    unsigned int GetPosition() const { return m_position; } ;
+private:
+    unsigned int m_value;
+    unsigned int m_position;
+};
 
-void your_sort(unsigned int* const d_inputVals,
-               unsigned int* const d_inputPos,
-               unsigned int* const d_outputVals,
-               unsigned int* const d_outputPos,
-               const size_t numElems)
+
+sort_element::sort_element(const unsigned int value, const unsigned int position)
+  : m_value(value),
+    m_position(position)
+{
+}
+
+bool operator<(sort_element const& lhs, sort_element const& rhs)
+{
+    return lhs.GetValue() < rhs.GetValue();
+}
+
+
+void your_sort_cpu(unsigned int* const d_inputVals,
+                   unsigned int* const d_inputPos,
+                   unsigned int* const d_outputVals,
+                   unsigned int* const d_outputPos,
+                   const size_t numElems)
+{
+    // This is a simple, CPU-based, implementation for reference purposes.
+
+    unsigned int* h_vals = new unsigned int[numElems];
+    unsigned int* h_pos  = new unsigned int[numElems];
+
+    unsigned int numBytes = numElems * sizeof(unsigned int);
+    memset(h_vals, 0, numBytes);
+    memset(h_pos, 0, numBytes);
+
+    cudaMemcpy(h_vals, d_inputVals, numBytes, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_pos,  d_inputPos,  numBytes, cudaMemcpyDeviceToHost);
+
+    std::vector<sort_element> data;
+    data.reserve(numElems);
+
+    for (unsigned int i = 0; i < numElems; i++)
+    {
+        data.push_back(sort_element(h_vals[i], h_pos[i]));
+    }
+
+    // We need to use a stable sort. 
+    // Otherwise output positions for the same input value may not match the reference code output positions giving a difference.
+    stable_sort(data.begin(), data.end());
+
+    for (unsigned int i = 0; i < numElems; i++)
+    {
+        h_vals[i] = data[i].GetValue();
+        h_pos[i]  = data[i].GetPosition();
+    }
+
+    cudaMemcpy(d_outputVals, h_vals, numBytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_outputPos,  h_pos,  numBytes, cudaMemcpyHostToDevice);
+
+    delete[] h_vals;
+    delete[] h_pos;
+}
+
+
+void your_sort_gpu(unsigned int* const d_inputVals,
+                   unsigned int* const d_inputPos,
+                   unsigned int* const d_outputVals,
+                   unsigned int* const d_outputPos,
+                   const size_t numElems)
 { 
     //TODO
     //PUT YOUR SORT HERE
@@ -167,9 +235,8 @@ void your_sort(unsigned int* const d_inputVals,
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-        // take a look at the histogram
+        // DEBUG: take a look at the histogram
         unsigned int h_histo[numBins];
- 
         cudaMemcpy(&h_histo, d_bins, binSizeBytes, cudaMemcpyDeviceToHost);
 
         //
@@ -186,9 +253,8 @@ void your_sort(unsigned int* const d_inputVals,
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-        // take a look at the cfd
+        // DEBUG: take a look at the cfd
         unsigned int h_cdf[numBins];
- 
         cudaMemcpy(&h_cdf, d_cdf, cdfSizeBytes, cudaMemcpyDeviceToHost);
 
         //
@@ -209,3 +275,13 @@ void your_sort(unsigned int* const d_inputVals,
     cudaFree(d_cdf);
     d_cdf = NULL;
 }
+
+
+void your_sort(unsigned int* const d_inputVals,
+               unsigned int* const d_inputPos,
+               unsigned int* const d_outputVals,
+               unsigned int* const d_outputPos,
+               const size_t numElems)
+{
+    your_sort_cpu(d_inputVals, d_inputPos, d_outputVals, d_outputPos, numElems);
+}             
