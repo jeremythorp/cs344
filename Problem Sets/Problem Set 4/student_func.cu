@@ -223,6 +223,7 @@ void calcOffsets
 (
     unsigned int* const d_inputVals, 
     unsigned int* d_offsetArray, 
+    unsigned int* d_binCount,
     const size_t numElems,
     const unsigned int numBins,
     const unsigned int shift, 
@@ -231,25 +232,42 @@ void calcOffsets
 {
     const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
 
+    if (myIndex < numBins)
+        d_binCount[myIndex] = 0;
+        
+    __syncthreads();
+
     if (myIndex == 0)
     {
-        unsigned int* binCount = new unsigned int[numBins];
-
-        for (int i = 0; i < numBins; i++)
-            binCount[i] = 0;
-
         for (int i = 0; i < numElems; i++)
         {
             unsigned int value = d_inputVals[i];            
             int bin = (value >> shift) & mask;
-            d_offsetArray[i] = binCount[bin];
-            binCount[bin]++;
+            d_offsetArray[i] = d_binCount[bin];
+            atomicAdd(&(d_binCount[bin]), 1);
         }
-
-        delete binCount;
     }
 }
+/*
+{
+    extern __shared__ unsigned int binCount[];
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
 
+    if (myIndex < numBins)
+        binCount[myIndex] = 0;
+        
+    __syncthreads();
+    
+    if (myIndex < numElems)
+    {
+        unsigned int value = d_inputVals[myIndex];            
+        int bin = (value >> shift) & mask;
+        d_offsetArray[myIndex] = binCount[bin];
+
+        atomicAdd(&(binCount[bin]), 1);
+    }
+}
+*/
 
 __global__
 void scatter
@@ -307,15 +325,14 @@ void your_sort_gpu(unsigned int* const d_inputVals,
     cudaMalloc((void**) &d_bins, binSizeBytes);
     cudaMemset(d_bins, 0, binSizeBytes);
 
+    unsigned int* d_binCount = NULL;
+    cudaMalloc((void**) &d_binCount, binSizeBytes);
+    cudaMemset(d_binCount, 0, binSizeBytes);
+
     unsigned int cdfSizeBytes = numBins * sizeof(unsigned int);
     unsigned int* d_cdf = NULL;
     cudaMalloc((void**) &d_cdf, cdfSizeBytes);
     cudaMemset(d_bins, 0, cdfSizeBytes);
-
-    //unsigned int compactSizeBytes = numElems * sizeof(unsigned int);
-    //unsigned int* d_compact = NULL;
-    //cudaMalloc((void**) &d_compact, compactSizeBytes);
-    //cudaMemset(d_compact, 0, compactSizeBytes);
 
     unsigned int offsetArraySize = numElems * numBins;
     unsigned int offsetArraySizeBytes = offsetArraySize * sizeof(unsigned int);
@@ -375,7 +392,7 @@ void your_sort_gpu(unsigned int* const d_inputVals,
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
         
-        calcOffsets<<<gridSize, blockSize>>>(d_inputVals, d_offsetArray, numElems, numBins, shift, mask);
+        calcOffsets<<<gridSize, blockSize>>>(d_inputVals, d_offsetArray, d_binCount, numElems, numBins, shift, mask);
          
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
@@ -416,8 +433,8 @@ void your_sort_gpu(unsigned int* const d_inputVals,
     d_cdf = NULL;
     cudaFree(d_offsetArray);
     d_offsetArray = NULL;
-    //cudaFree(d_compact);
-    //d_compact = NULL;
+    cudaFree(d_binCount);
+    d_binCount = NULL;
 }
 
 
