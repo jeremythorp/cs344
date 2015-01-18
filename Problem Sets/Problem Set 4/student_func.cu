@@ -44,12 +44,23 @@
  */
 
 __global__
-void histogram(unsigned int* d_bins, unsigned int* const d_inputVals, const unsigned int shift, const unsigned int mask)
+void histogram
+(
+    unsigned int* d_bins, 
+    unsigned int* const d_inputVals, 
+    const unsigned int shift, 
+    const unsigned int mask, 
+    const unsigned int numElems
+)
 {
     const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
-    unsigned int value = d_inputVals[myIndex];
-    unsigned int myBin = (value >> shift) & mask;
-    atomicAdd(&(d_bins[myBin]), 1);
+
+    if (myIndex < numElems)
+    {
+        unsigned int value = d_inputVals[myIndex];
+        unsigned int myBin = (value >> shift) & mask;
+        atomicAdd(&(d_bins[myBin]), 1);
+    }
 }
 
 
@@ -184,6 +195,91 @@ void your_sort_cpu(unsigned int* const d_inputVals,
 }
 
 
+__global__
+void fillOffsetArray
+(
+    unsigned int* const d_inputVals, 
+    unsigned int* d_offsetArray, 
+    const size_t numElems,
+    const unsigned int numBins,
+    const unsigned int shift, 
+    const unsigned int mask
+)
+{
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (myIndex < numElems)
+    {
+        unsigned int value = d_inputVals[myIndex];
+        unsigned int myBin = (value >> shift) & mask;
+
+        d_offsetArray[numElems * myBin + myIndex] = 1;
+    }
+}
+
+
+__global__
+void calcOffsets
+(
+    unsigned int* const d_inputVals, 
+    unsigned int* d_offsetArray, 
+    const size_t numElems,
+    const unsigned int numBins,
+    const unsigned int shift, 
+    const unsigned int mask
+)
+{
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (myIndex == 0)
+    {
+        unsigned int* binCount = new unsigned int[numBins];
+
+        for (int i = 0; i < numBins; i++)
+            binCount[i] = 0;
+
+        for (int i = 0; i < numElems; i++)
+        {
+            unsigned int value = d_inputVals[i];            
+            int bin = (value >> shift) & mask;
+            d_offsetArray[i] = binCount[bin];
+            binCount[bin]++;
+        }
+
+        delete binCount;
+    }
+}
+
+
+__global__
+void scatter
+(
+    unsigned int* const d_inputVals, 
+    unsigned int* const d_inputPos,
+    unsigned int* const d_outputVals,
+    unsigned int* const d_outputPos,
+    unsigned int* const d_cdf,
+    unsigned int* d_offsetArray, 
+    const size_t numElems,
+    const unsigned int numBins,
+    const unsigned int shift, 
+    const unsigned int mask
+)
+{
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (myIndex < numElems)
+    {
+        unsigned int value = d_inputVals[myIndex];            
+        int bin = (value >> shift) & mask;
+        int destIndex = d_offsetArray[myIndex] + d_cdf[bin];
+
+        d_outputVals[destIndex] = d_inputVals[myIndex];
+        d_outputPos[destIndex]  = d_inputPos[myIndex];
+    }
+}
+
+
 void your_sort_gpu(unsigned int* const d_inputVals,
                    unsigned int* const d_inputPos,
                    unsigned int* const d_outputVals,
@@ -198,8 +294,9 @@ void your_sort_gpu(unsigned int* const d_inputVals,
     //
 
     const int numThreads = 1024;
+    const int numBlocks  = (numElems + numThreads - 1) / numThreads;
     const dim3 blockSize(numThreads);
-    const dim3 gridSize(numElems / numThreads);
+    const dim3 gridSize(numBlocks);
 
     const unsigned int shiftSize = 8;
     const unsigned int numBins = 1 << shiftSize;
@@ -214,6 +311,17 @@ void your_sort_gpu(unsigned int* const d_inputVals,
     unsigned int* d_cdf = NULL;
     cudaMalloc((void**) &d_cdf, cdfSizeBytes);
     cudaMemset(d_bins, 0, cdfSizeBytes);
+
+    //unsigned int compactSizeBytes = numElems * sizeof(unsigned int);
+    //unsigned int* d_compact = NULL;
+    //cudaMalloc((void**) &d_compact, compactSizeBytes);
+    //cudaMemset(d_compact, 0, compactSizeBytes);
+
+    unsigned int offsetArraySize = numElems * numBins;
+    unsigned int offsetArraySizeBytes = offsetArraySize * sizeof(unsigned int);
+    unsigned int* d_offsetArray = NULL;
+    cudaMalloc((void**) &d_offsetArray, offsetArraySizeBytes);
+    cudaMemset(d_offsetArray, 0, offsetArraySizeBytes);
 
     // Check all is ok
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
@@ -230,7 +338,7 @@ void your_sort_gpu(unsigned int* const d_inputVals,
 
         cudaMemset(d_bins, 0, binSizeBytes);
 
-        histogram<<<gridSize, blockSize>>>(d_bins, d_inputVals, shift, mask);
+        histogram<<<gridSize, blockSize>>>(d_bins, d_inputVals, shift, mask, numElems);
         
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
@@ -260,11 +368,43 @@ void your_sort_gpu(unsigned int* const d_inputVals,
         //
         // (3) Determine relative offset of each digit
         //
+
+        cudaMemset(d_offsetArray, 0, offsetArraySizeBytes);
+        //fillOffsetArray<<<gridSize, blockSize>>>(d_inputVals, d_offsetArray, numElems, numBins, shift, mask);
+
+        // Check all is ok
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+        
+        calcOffsets<<<gridSize, blockSize>>>(d_inputVals, d_offsetArray, numElems, numBins, shift, mask);
+         
+        // Check all is ok
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
     
         //
         // (4) Combine the results of steps 2 & 3 to determine the final  output 
         //     location for each element and move it there)
         //
+
+        scatter<<<gridSize, blockSize>>>(
+            d_inputVals, 
+            d_inputPos,
+            d_outputVals,
+            d_outputPos,
+            d_cdf,
+            d_offsetArray, 
+            numElems,
+            numBins,
+            shift, 
+            mask
+        );
+
+        // Check all is ok
+        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+        // copy ready for next loop.
+        unsigned int intputSizeBytes = numElems * sizeof(unsigned int);
+        cudaMemcpy(d_inputVals, d_outputVals, intputSizeBytes, cudaMemcpyDeviceToDevice);
+        cudaMemcpy(d_inputPos,  d_outputPos,  intputSizeBytes, cudaMemcpyDeviceToDevice);
 
         shift += shiftSize;
     }
@@ -274,6 +414,10 @@ void your_sort_gpu(unsigned int* const d_inputVals,
     d_bins = NULL;
     cudaFree(d_cdf);
     d_cdf = NULL;
+    cudaFree(d_offsetArray);
+    d_offsetArray = NULL;
+    //cudaFree(d_compact);
+    //d_compact = NULL;
 }
 
 
@@ -283,5 +427,6 @@ void your_sort(unsigned int* const d_inputVals,
                unsigned int* const d_outputPos,
                const size_t numElems)
 {
-    your_sort_cpu(d_inputVals, d_inputPos, d_outputVals, d_outputPos, numElems);
+    //your_sort_cpu(d_inputVals, d_inputPos, d_outputVals, d_outputPos, numElems); // for debugging
+    your_sort_gpu(d_inputVals, d_inputPos, d_outputVals, d_outputPos, numElems);
 }             
