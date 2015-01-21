@@ -195,6 +195,7 @@ void your_sort_cpu(unsigned int* const d_inputVals,
 }
 
 
+/*
 __global__
 void fillOffsetArray
 (
@@ -216,6 +217,7 @@ void fillOffsetArray
         d_offsetArray[numElems * myBin + myIndex] = 1;
     }
 }
+*/
 
 
 __global__
@@ -334,7 +336,7 @@ void your_sort_gpu(unsigned int* const d_inputVals,
     cudaMalloc((void**) &d_cdf, cdfSizeBytes);
     cudaMemset(d_bins, 0, cdfSizeBytes);
 
-    unsigned int offsetArraySize = numElems * numBins;
+    unsigned int offsetArraySize = numElems;
     unsigned int offsetArraySizeBytes = offsetArraySize * sizeof(unsigned int);
     unsigned int* d_offsetArray = NULL;
     cudaMalloc((void**) &d_offsetArray, offsetArraySizeBytes);
