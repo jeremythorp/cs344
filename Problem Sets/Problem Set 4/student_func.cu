@@ -63,7 +63,7 @@ void histogram
     }
 }
 
-
+/*
 __global__
 void cumulativeDistribution(unsigned int* const d_cdf, const unsigned int* d_bins)
 {
@@ -74,7 +74,7 @@ void cumulativeDistribution(unsigned int* const d_cdf, const unsigned int* d_bin
     __syncthreads();
 
     //
-    // Use a Blelloch scan algorithm
+    // Use a Blelloch scan algorithm (exclusive prefix sum)
     //
 
     // Reduce step
@@ -124,6 +124,78 @@ void cumulativeDistribution(unsigned int* const d_cdf, const unsigned int* d_bin
     }
 
     d_cdf[myIndex] = shared_data2[myIndex];
+}
+*/
+
+
+__global__
+void blelloch_scan(unsigned int* const d_scanResult, unsigned int* d_blockSums, const unsigned int* d_input)
+{
+    extern __shared__ unsigned int shared_data2[];
+    const int myIndex = threadIdx.x;
+    const int myBlockSumIndex = blockIdx.x;
+
+    shared_data2[myIndex] = d_input[myIndex];
+    __syncthreads();
+
+    //
+    // Use a Blelloch scan algorithm
+    //
+
+    // Reduce step
+
+    const unsigned numValues = blockDim.x;
+    const unsigned int maxIndex = numValues - 1;
+    unsigned int offset = 1;
+
+    for (unsigned int operations = numValues / 2; operations > 0; operations >>=1)
+    {
+        if (myIndex < operations)
+        {
+            unsigned int firstIndex  = offset * (2 * myIndex + 1) - 1;
+            unsigned int secondIndex = offset * (2 * myIndex + 2) - 1;
+            shared_data2[secondIndex] += shared_data2[firstIndex];
+        }
+
+        offset *= 2;
+        __syncthreads();
+    }
+
+
+    // Downsweep step
+
+    if (myIndex == 0)
+    {
+        shared_data2[maxIndex] = 0;
+    }
+    
+    __syncthreads();
+
+    for (unsigned int operations = 1; operations <= (numValues / 2); operations <<=1)
+    {
+        offset >>= 1;
+
+        if (myIndex < operations)
+        {
+            unsigned int firstIndex  = offset * (2 * myIndex + 1) - 1;
+            unsigned int secondIndex = offset * (2 * myIndex + 2) - 1;
+
+            unsigned int temp = shared_data2[firstIndex];
+            shared_data2[firstIndex]  = shared_data2[secondIndex];
+            shared_data2[secondIndex] += temp;
+        }
+
+        __syncthreads();
+    }
+
+    __syncthreads();
+
+    d_scanResult[myIndex] = shared_data2[myIndex];
+
+    if ((myIndex == maxIndex) && (d_blockSums != NULL))
+    {
+        d_blockSums[myBlockSumIndex] = shared_data2[myIndex];
+    }   
 }
 
 
@@ -195,33 +267,10 @@ void your_sort_cpu(unsigned int* const d_inputVals,
 }
 
 
-/*
-__global__
-void fillOffsetArray
-(
-    unsigned int* const d_inputVals, 
-    unsigned int* d_offsetArray, 
-    const size_t numElems,
-    const unsigned int numBins,
-    const unsigned int shift, 
-    const unsigned int mask
-)
-{
-    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (myIndex < numElems)
-    {
-        unsigned int value = d_inputVals[myIndex];
-        unsigned int myBin = (value >> shift) & mask;
-
-        d_offsetArray[numElems * myBin + myIndex] = 1;
-    }
-}
-*/
 
 
 __global__
-void calcOffsets
+void calcOffsetsSequential
 (
     unsigned int* const d_inputVals, 
     unsigned int* d_offsetArray, 
@@ -250,26 +299,7 @@ void calcOffsets
         }
     }
 }
-/*
-{
-    extern __shared__ unsigned int binCount[];
-    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (myIndex < numBins)
-        binCount[myIndex] = 0;
-        
-    __syncthreads();
-    
-    if (myIndex < numElems)
-    {
-        unsigned int value = d_inputVals[myIndex];            
-        int bin = (value >> shift) & mask;
-        d_offsetArray[myIndex] = binCount[bin];
-
-        atomicAdd(&(binCount[bin]), 1);
-    }
-}
-*/
 
 __global__
 void scatter
@@ -375,7 +405,8 @@ void your_sort_gpu(unsigned int* const d_inputVals,
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-        cumulativeDistribution<<<1, numBins, numBins * sizeof(unsigned int)>>>(d_cdf, d_bins); 
+        //cumulativeDistribution<<<1, numBins, numBins * sizeof(unsigned int)>>>(d_cdf, d_bins); 
+        blelloch_scan<<<1, numBins, numBins * sizeof(unsigned int)>>>(d_cdf, NULL, d_bins);
 
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
@@ -394,7 +425,7 @@ void your_sort_gpu(unsigned int* const d_inputVals,
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
         
-        calcOffsets<<<gridSize, blockSize>>>(d_inputVals, d_offsetArray, d_binCount, numElems, numBins, shift, mask);
+        calcOffsetsSequential<<<gridSize, blockSize>>>(d_inputVals, d_offsetArray, d_binCount, numElems, numBins, shift, mask);
          
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
