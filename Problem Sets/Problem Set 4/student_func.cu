@@ -63,70 +63,6 @@ void histogram
     }
 }
 
-/*
-__global__
-void cumulativeDistribution(unsigned int* const d_cdf, const unsigned int* d_bins)
-{
-    extern __shared__ unsigned int shared_data2[];
-    const int myIndex = threadIdx.x;
-
-    shared_data2[myIndex] = d_bins[myIndex];
-    __syncthreads();
-
-    //
-    // Use a Blelloch scan algorithm (exclusive prefix sum)
-    //
-
-    // Reduce step
-
-    const unsigned numBins = blockDim.x;
-    const unsigned int maxIndex = numBins - 1;
-    unsigned int offset = 1;
-
-    for (unsigned int operations = numBins / 2; operations > 0; operations >>=1)
-    {
-        if (myIndex < operations)
-        {
-            unsigned int firstIndex  = offset * (2 * myIndex + 1) - 1;
-            unsigned int secondIndex = offset * (2 * myIndex + 2) - 1;
-            shared_data2[secondIndex] += shared_data2[firstIndex];
-        }
-
-        offset *= 2;
-        __syncthreads();
-    }
-
-
-    // Downsweep step
-
-    if (myIndex == 0)
-    {
-        shared_data2[maxIndex] = 0;
-    }
-    
-    __syncthreads();
-
-    for (unsigned int operations = 1; operations <= (numBins / 2); operations <<=1)
-    {
-        offset >>= 1;
-
-        if (myIndex < operations)
-        {
-            unsigned int firstIndex  = offset * (2 * myIndex + 1) - 1;
-            unsigned int secondIndex = offset * (2 * myIndex + 2) - 1;
-
-            unsigned int temp = shared_data2[firstIndex];
-            shared_data2[firstIndex]  = shared_data2[secondIndex];
-            shared_data2[secondIndex] += temp;
-        }
-
-        __syncthreads();
-    }
-
-    d_cdf[myIndex] = shared_data2[myIndex];
-}
-*/
-
 
 __global__
 void blelloch_scan(unsigned int* const d_scanResult, unsigned int* d_blockSums, const unsigned int* d_input)
@@ -223,6 +159,12 @@ bool operator<(sort_element const& lhs, sort_element const& rhs)
 }
 
 
+unsigned int offset(unsigned int x, unsigned int y, const size_t numElems)
+{
+    return x + (y * numElems);
+}
+
+
 void your_sort_cpu(unsigned int* const d_inputVals,
                    unsigned int* const d_inputPos,
                    unsigned int* const d_outputVals,
@@ -302,6 +244,62 @@ void calcOffsetsSequential
 
 
 __global__
+void calcOffsetsParallel
+(
+    unsigned int* const d_inputVals, 
+    unsigned int* d_offsetArray, 
+    const size_t numElems,
+    const unsigned int numBins,
+    const unsigned int shift, 
+    const unsigned int mask
+)
+{
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
+
+    unsigned int value = d_inputVals[myIndex];            
+    int bin = (value >> shift) & mask;
+
+    unsigned int index = myIndex + (bin * numElems);
+
+    d_offsetArray[myIndex] = d_offsetArray[index];
+}
+
+
+__global__
+void compact
+(
+    unsigned int* const d_inputVals, 
+    unsigned int* d_compactResults, 
+    const size_t numElems,
+    const unsigned int shift, 
+    const unsigned int mask,
+    const unsigned int requiredBin
+)
+{
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int value = d_inputVals[myIndex];
+    int bin = (value >> shift) & mask;
+    d_compactResults[myIndex] = 0;
+
+    if (bin == requiredBin)
+        d_compactResults[myIndex] = 1;
+}
+
+
+__global__
+void booleanInvert
+(
+    unsigned int* d_values,
+    const size_t numElems
+)
+{
+    const int myIndex   = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (myIndex < numElems)
+        d_values[myIndex] = (d_values[myIndex] == 0);
+}
+
+__global__
 void scatter
 (
     unsigned int* const d_inputVals, 
@@ -330,6 +328,8 @@ void scatter
 }
 
 
+
+
 void your_sort_gpu(unsigned int* const d_inputVals,
                    unsigned int* const d_inputPos,
                    unsigned int* const d_outputVals,
@@ -348,7 +348,7 @@ void your_sort_gpu(unsigned int* const d_inputVals,
     const dim3 blockSize(numThreads);
     const dim3 gridSize(numBlocks);
 
-    const unsigned int shiftSize = 8;
+    const unsigned int shiftSize = 1;
     const unsigned int numBins = 1 << shiftSize;
     const unsigned int mask = (1 << shiftSize) - 1;
 
@@ -366,11 +366,27 @@ void your_sort_gpu(unsigned int* const d_inputVals,
     cudaMalloc((void**) &d_cdf, cdfSizeBytes);
     cudaMemset(d_bins, 0, cdfSizeBytes);
 
-    unsigned int offsetArraySize = numElems;
+    unsigned int offsetArraySize = numElems * numBins;
     unsigned int offsetArraySizeBytes = offsetArraySize * sizeof(unsigned int);
     unsigned int* d_offsetArray = NULL;
     cudaMalloc((void**) &d_offsetArray, offsetArraySizeBytes);
     cudaMemset(d_offsetArray, 0, offsetArraySizeBytes);
+
+
+    unsigned int blockSumSize = numBlocks;
+    unsigned int blockSumSizeBytes = blockSumSize * sizeof(unsigned int);
+    unsigned int* d_blockSums = NULL;
+    cudaMalloc((void**) &d_blockSums, blockSumSizeBytes);
+    cudaMemset(d_blockSums, 0, blockSumSizeBytes);
+
+    unsigned int compactSize = numElems;
+    unsigned int compactSizeBytes = compactSize * sizeof(unsigned int);
+    unsigned int* d_compactResults = NULL;
+    cudaMalloc((void**) &d_compactResults, compactSizeBytes);
+    cudaMemset(d_compactResults, 0, compactSizeBytes);
+    unsigned int* d_compactResults2 = NULL;
+    cudaMalloc((void**) &d_compactResults2, compactSizeBytes);
+    cudaMemset(d_compactResults2, 0, compactSizeBytes);
 
     // Check all is ok
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
@@ -379,7 +395,7 @@ void your_sort_gpu(unsigned int* const d_inputVals,
 
     unsigned int shift = 0;
 
-    for (int pass = 0; pass < numPasses; pass++)
+    for (unsigned int pass = 0; pass < numPasses; pass++)
     {
         //
         // (1) Calculate the histogram
@@ -425,8 +441,27 @@ void your_sort_gpu(unsigned int* const d_inputVals,
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
         
-        calcOffsetsSequential<<<gridSize, blockSize>>>(d_inputVals, d_offsetArray, d_binCount, numElems, numBins, shift, mask);
-         
+        //calcOffsetsSequential<<<gridSize, blockSize>>>(d_inputVals, d_offsetArray, d_binCount, numElems, numBins, shift, mask);
+
+        for (unsigned int binIndex = 0; binIndex < numBins; binIndex++)
+        {
+            unsigned thisOffset = offset(0, binIndex, numElems);
+            unsigned int* d_binCompactResults = d_compactResults + thisOffset;
+            unsigned int* d_binOffsetArray    = d_offsetArray    + thisOffset;
+
+            compact<<<gridSize, blockSize>>>(d_inputVals, d_binCompactResults, numElems, shift, mask, binIndex);
+            
+            // Check all is ok
+            cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());            
+
+            blelloch_scan<<<gridSize, blockSize, blockSize.x * sizeof(unsigned int)>>>(d_binCompactResults, NULL, d_binOffsetArray);
+
+            // Check all is ok
+            cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());            
+        }
+                
+        calcOffsetsParallel<<<gridSize, blockSize>>>(d_inputVals, d_offsetArray, numElems, numBins, shift, mask);
+
         // Check all is ok
         cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
     
@@ -468,6 +503,12 @@ void your_sort_gpu(unsigned int* const d_inputVals,
     d_offsetArray = NULL;
     cudaFree(d_binCount);
     d_binCount = NULL;
+    cudaFree(d_blockSums);
+    d_blockSums = NULL;
+    cudaFree(d_compactResults);
+    d_compactResults = NULL;
+    cudaFree(d_compactResults2);
+    d_compactResults2 = NULL;
 }
 
 
