@@ -1,6 +1,10 @@
 //Udacity HW 6
 //Poisson Blending
 
+#include <vector>
+
+using namespace std;
+
 /* Background
    ==========
 
@@ -68,14 +72,81 @@
 #include <thrust/host_vector.h>
 
 
+size_t calcIndex(size_t x, size_t y, size_t /*numRows*/, size_t numCols)
+{
+    const unsigned int index = y * numCols + x;
+
+    return index;
+}
+
+
+bool isImageEdge(size_t x, size_t y, size_t numRows, size_t numCols)
+{
+    bool isEdge = (x == 0) || (y == 0) || (x == (numCols - 1)) || (y == (numRows - 1));
+
+    return isEdge;
+}
+
+
 void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
     const size_t numRowsSource, const size_t numColsSource,
     const uchar4* const h_destImg, //IN
     uchar4* const h_blendedImg) //OUT
 {
-    const size_t imageSizeBytes = numRowsSource * numColsSource * sizeof(uchar4);
-    memcpy(h_blendedImg, h_destImg, imageSizeBytes);
+    const size_t numPixels = numRowsSource * numColsSource;
+    const size_t imageSizeBytes = numPixels * sizeof(uchar4);
+    //memcpy(h_blendedImg, h_destImg, imageSizeBytes);
 
+    // 1. Create the mask
+
+    vector<bool> mask;
+    mask.resize(numPixels);
+
+    for (unsigned int row = 0; row < numRowsSource; row++)
+    {
+        for (unsigned int col = 0; col < numColsSource; col++)
+        {
+            const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+            const uchar4 pixel = h_sourceImg[index];
+
+            const unsigned char red   = pixel.x;
+            const unsigned char green = pixel.y;
+            const unsigned char blue = pixel.z;
+
+            const bool white = (red == 255) && (green == 255) && (blue == 255);
+            mask[index] = white;
+
+        }
+    }
+
+
+    // 2. Compute interior and border regions of the mask.
+
+    vector<bool> interior;
+    interior.resize(numPixels);
+    vector<bool> border;
+    border.resize(numPixels);
+
+    for (unsigned int row = 0; row < numRowsSource; row++)
+    {
+        for (unsigned int col = 0; col < numColsSource; col++)
+        {
+            const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+
+            bool isInterior = false;
+
+            if (!isImageEdge(col, row, numRowsSource, numColsSource))
+            {
+                isInterior &= !mask[calcIndex(col - 1, row    , numRowsSource, numColsSource)];
+                isInterior &= !mask[calcIndex(col + 1, row    , numRowsSource, numColsSource)];
+                isInterior &= !mask[calcIndex(col    , row - 1, numRowsSource, numColsSource)];
+                isInterior &= !mask[calcIndex(col    , row + 1, numRowsSource, numColsSource)];
+            }
+
+            interior[index] = isInterior;
+            border[index] = mask[index] & !isInterior;
+        }
+    }
 
 }
 
