@@ -115,7 +115,6 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
 
             const bool white = (red == 255) && (green == 255) && (blue == 255);
             mask[index] = white;
-
         }
     }
 
@@ -145,6 +144,32 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
 
             interior[index] = isInterior;
             border[index] = mask[index] & !isInterior;
+        }
+    }
+
+    // 3 & 4: Split into colour channels.
+
+    vector<float> channelRed;
+    channelRed.resize(numPixels);
+    vector<float> channelGreen;
+    channelGreen.resize(numPixels);
+    vector<float> channelBlue;
+    channelBlue.resize(numPixels);
+
+    for (unsigned int row = 0; row < numRowsSource; row++)
+    {
+        for (unsigned int col = 0; col < numColsSource; col++)
+        {
+            const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+            const uchar4 pixel = h_sourceImg[index];
+
+            const unsigned char red = pixel.x;
+            const unsigned char green = pixel.y;
+            const unsigned char blue = pixel.z;
+
+            channelRed[index]   = red;
+            channelGreen[index] = green;
+            channelBlue[index]  = blue;
         }
     }
 
