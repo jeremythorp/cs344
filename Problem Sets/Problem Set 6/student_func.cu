@@ -67,6 +67,19 @@
 #include "utils.h"
 #include <thrust/host_vector.h>
 
+
+void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
+    const size_t numRowsSource, const size_t numColsSource,
+    const uchar4* const h_destImg, //IN
+    uchar4* const h_blendedImg) //OUT
+{
+    const size_t imageSizeBytes = numRowsSource * numColsSource * sizeof(uchar4);
+    memcpy(h_blendedImg, h_destImg, imageSizeBytes);
+
+
+}
+
+
 void your_blend(const uchar4* const h_sourceImg,  //IN
                 const size_t numRowsSource, const size_t numColsSource,
                 const uchar4* const h_destImg, //IN
@@ -110,4 +123,6 @@ void your_blend(const uchar4* const h_sourceImg,  //IN
 
       to catch any errors that happened while executing the kernel.
   */
+
+    your_blend_cpu(h_sourceImg, numRowsSource, numColsSource, h_destImg, h_blendedImg);
 }
