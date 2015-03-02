@@ -200,17 +200,23 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
             const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
 
             bool isInterior = false;
+            bool isBorder = false;
 
             if (!isImageEdge(col, row, numRowsSource, numColsSource))
             {
-                isInterior =  mask[calcIndex(col - 1, row    , numRowsSource, numColsSource)];
-                isInterior &= mask[calcIndex(col + 1, row    , numRowsSource, numColsSource)];
-                isInterior &= mask[calcIndex(col    , row - 1, numRowsSource, numColsSource)];
-                isInterior &= mask[calcIndex(col    , row + 1, numRowsSource, numColsSource)];
+                isInterior = mask[calcIndex(col, row, numRowsSource, numColsSource)];
+                isInterior = isInterior && mask[calcIndex(col - 1, row, numRowsSource, numColsSource)];
+                isInterior = isInterior && mask[calcIndex(col + 1, row    , numRowsSource, numColsSource)];
+                isInterior = isInterior && mask[calcIndex(col,     row - 1, numRowsSource, numColsSource)];
+                isInterior = isInterior && mask[calcIndex(col,     row + 1, numRowsSource, numColsSource)];
             }
 
             interior[index] = isInterior;
-            border[index] = mask[index] & !isInterior;
+
+            if (!isInterior)
+                isBorder = mask[index];
+
+            border[index] = isBorder;
         }
     }
 
