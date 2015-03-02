@@ -2,6 +2,7 @@
 //Poisson Blending
 
 #include <vector>
+#include <algorithm>
 
 using namespace std;
 
@@ -71,6 +72,10 @@ using namespace std;
 #include "utils.h"
 #include <thrust/host_vector.h>
 
+void reference_calc(const uchar4* const h_sourceImg,
+    const size_t numRowsSource, const size_t numColsSource,
+    const uchar4* const h_destImg,
+    uchar4* const h_blendedImg);
 
 size_t calcIndex(size_t x, size_t y, size_t /*numRows*/, size_t numCols)
 {
@@ -87,6 +92,50 @@ bool isImageEdge(size_t x, size_t y, size_t numRows, size_t numCols)
     return isEdge;
 }
 
+/*
+float newPixelChannelValue
+(
+    const uchar4* const h_sourceImg,  //IN
+    const size_t numRowsSource, 
+    const size_t numColsSource,
+    const uchar4* const h_destImg, //IN
+    vector<bool> const& mask,
+    vector<bool> const& interior,
+    vector<bool> const& border,
+    vector<float> const& channel,
+    int col,
+    int row
+)
+{
+    const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+
+    float sum1 = 0;
+    float sum2 = 0;
+
+    
+
+    
+    channel[calcIndex(col - 1, row, numRowsSource, numColsSource)];
+
+
+
+    sum2 += h_sourceImg[calcIndex(col, row, numRowsSource, numColsSource)] - h_sourceImg[calcIndex(col - 1, row, numRowsSource, numColsSource)];
+    sum2 += h_sourceImg[calcIndex(col, row, numRowsSource, numColsSource)] - h_sourceImg[calcIndex(col - 1, row, numRowsSource, numColsSource)];
+    sum2 += h_sourceImg[calcIndex(col, row, numRowsSource, numColsSource)] - h_sourceImg[calcIndex(col - 1, row, numRowsSource, numColsSource)];
+    sum2 += h_sourceImg[calcIndex(col, row, numRowsSource, numColsSource)] - h_sourceImg[calcIndex(col - 1, row, numRowsSource, numColsSource)];
+
+
+    isInterior &= mask[calcIndex(col + 1, row, numRowsSource, numColsSource)];
+    isInterior &= mask[calcIndex(col, row - 1, numRowsSource, numColsSource)];
+    isInterior &= mask[calcIndex(col, row + 1, numRowsSource, numColsSource)];
+
+
+
+    float newVal = (sum1 + sum2) / 4.0f;
+    newVal = std::min(255.0f, std::max(0.0f, newVal));
+    return newVal;
+}
+*/
 
 void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
     const size_t numRowsSource, const size_t numColsSource,
@@ -99,7 +148,7 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
 
     // 1. Create the mask
 
-    vector<bool> mask;
+    vector<bool> mask; // true for 'non-white' pixels
     mask.resize(numPixels);
 
     for (unsigned int row = 0; row < numRowsSource; row++)
@@ -114,7 +163,7 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
             const unsigned char blue = pixel.z;
 
             const bool white = (red == 255) && (green == 255) && (blue == 255);
-            mask[index] = white;
+            mask[index] = !white;
         }
     }
 
@@ -136,10 +185,10 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
 
             if (!isImageEdge(col, row, numRowsSource, numColsSource))
             {
-                isInterior &= !mask[calcIndex(col - 1, row    , numRowsSource, numColsSource)];
-                isInterior &= !mask[calcIndex(col + 1, row    , numRowsSource, numColsSource)];
-                isInterior &= !mask[calcIndex(col    , row - 1, numRowsSource, numColsSource)];
-                isInterior &= !mask[calcIndex(col    , row + 1, numRowsSource, numColsSource)];
+                isInterior =  mask[calcIndex(col - 1, row    , numRowsSource, numColsSource)];
+                isInterior &= mask[calcIndex(col + 1, row    , numRowsSource, numColsSource)];
+                isInterior &= mask[calcIndex(col    , row - 1, numRowsSource, numColsSource)];
+                isInterior &= mask[calcIndex(col    , row + 1, numRowsSource, numColsSource)];
             }
 
             interior[index] = isInterior;
@@ -170,6 +219,51 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
             channelRed[index]   = red;
             channelGreen[index] = green;
             channelBlue[index]  = blue;
+        }
+    }
+
+    vector<float> channelRed2(channelRed);
+    vector<float> channelGreen2(channelGreen);
+    vector<float> channelBlue2(channelBlue);
+
+    // 5. Jacobi calculations
+
+    for (unsigned int iteration = 0; iteration < 1; iteration++)
+    {
+        for (unsigned int row = 0; row < numRowsSource; row++)
+        {
+            for (unsigned int col = 0; col < numColsSource; col++)
+            {
+                const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+
+                if (mask[index])
+                {
+                    channelRed[index]   = h_sourceImg[index].x;
+                    channelGreen[index] = h_sourceImg[index].y;
+                    channelBlue[index]  = h_sourceImg[index].z;
+                }
+                else
+                {
+                    channelRed[index]   = h_destImg[index].x;
+                    channelGreen[index] = h_destImg[index].y;
+                    channelBlue[index]  = h_destImg[index].z;
+                }
+            }
+        }
+    }
+
+
+    // 6. Create the output image
+
+    for (unsigned int row = 0; row < numRowsSource; row++)
+    {
+        for (unsigned int col = 0; col < numColsSource; col++)
+        {
+            const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+
+            h_blendedImg[index].x = channelRed[index];
+            h_blendedImg[index].y = channelGreen[index];
+            h_blendedImg[index].z = channelBlue[index];
         }
     }
 
@@ -221,4 +315,5 @@ void your_blend(const uchar4* const h_sourceImg,  //IN
   */
 
     your_blend_cpu(h_sourceImg, numRowsSource, numColsSource, h_destImg, h_blendedImg);
+    //reference_calc(h_sourceImg, numRowsSource, numColsSource, h_destImg, h_blendedImg);
 }
