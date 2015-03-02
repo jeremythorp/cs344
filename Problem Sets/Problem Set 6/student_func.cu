@@ -92,50 +92,70 @@ bool isImageEdge(size_t x, size_t y, size_t numRows, size_t numCols)
     return isEdge;
 }
 
-/*
-float newPixelChannelValue
+
+void newChannelValue
 (
-    const uchar4* const h_sourceImg,  //IN
-    const size_t numRowsSource, 
+    vector<float> const& sourceChannel,
+    vector<float> const& destChannel,
+    vector<float> const& blendedChannel,
+    vector<float>& newBlendedChannel,
+    const size_t numRowsSource,
     const size_t numColsSource,
-    const uchar4* const h_destImg, //IN
     vector<bool> const& mask,
     vector<bool> const& interior,
-    vector<bool> const& border,
-    vector<float> const& channel,
-    int col,
-    int row
+    vector<bool> const& border
 )
 {
-    const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+    for (unsigned int row = 0; row < numRowsSource; row++)
+    {
+        for (unsigned int col = 0; col < numColsSource; col++)
+        {
+            if (!isImageEdge(col, row, numRowsSource, numColsSource))
+            {
+                const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+                const unsigned int index1 = calcIndex(col + 1, row, numRowsSource, numColsSource);
+                const unsigned int index2 = calcIndex(col - 1, row, numRowsSource, numColsSource);
+                const unsigned int index3 = calcIndex(col, row + 1, numRowsSource, numColsSource);
+                const unsigned int index4 = calcIndex(col, row - 1, numRowsSource, numColsSource);
 
-    float sum1 = 0;
-    float sum2 = 0;
+                float blendedSum = 0.0f;
+                float borderSum = 0.0f;
 
-    
+                if (interior[index1])
+                    blendedSum += blendedChannel[index1];
+                else
+                    borderSum += destChannel[index1];
 
-    
-    channel[calcIndex(col - 1, row, numRowsSource, numColsSource)];
+                if (interior[index2])
+                    blendedSum += blendedChannel[index2];
+                else
+                    borderSum += destChannel[index2];
 
+                if (interior[index3])
+                    blendedSum += blendedChannel[index3];
+                else
+                    borderSum += destChannel[index3];
 
+                if (interior[index4])
+                    blendedSum += blendedChannel[index4];
+                else
+                    borderSum += destChannel[index4];
+                
+                float sourceSum = 0.0f;
+                sourceSum += sourceChannel[index] - sourceChannel[index1];
+                sourceSum += sourceChannel[index] - sourceChannel[index2];
+                sourceSum += sourceChannel[index] - sourceChannel[index3];
+                sourceSum += sourceChannel[index] - sourceChannel[index4];
 
-    sum2 += h_sourceImg[calcIndex(col, row, numRowsSource, numColsSource)] - h_sourceImg[calcIndex(col - 1, row, numRowsSource, numColsSource)];
-    sum2 += h_sourceImg[calcIndex(col, row, numRowsSource, numColsSource)] - h_sourceImg[calcIndex(col - 1, row, numRowsSource, numColsSource)];
-    sum2 += h_sourceImg[calcIndex(col, row, numRowsSource, numColsSource)] - h_sourceImg[calcIndex(col - 1, row, numRowsSource, numColsSource)];
-    sum2 += h_sourceImg[calcIndex(col, row, numRowsSource, numColsSource)] - h_sourceImg[calcIndex(col - 1, row, numRowsSource, numColsSource)];
+                float newVal = (blendedSum + borderSum + sourceSum) / 4.0f;
+                newVal = std::min(255.0f, std::max(0.0f, newVal));
 
-
-    isInterior &= mask[calcIndex(col + 1, row, numRowsSource, numColsSource)];
-    isInterior &= mask[calcIndex(col, row - 1, numRowsSource, numColsSource)];
-    isInterior &= mask[calcIndex(col, row + 1, numRowsSource, numColsSource)];
-
-
-
-    float newVal = (sum1 + sum2) / 4.0f;
-    newVal = std::min(255.0f, std::max(0.0f, newVal));
-    return newVal;
+                newBlendedChannel[index] = newVal;
+            }
+        }
+    }
 }
-*/
+
 
 void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
     const size_t numRowsSource, const size_t numColsSource,
@@ -144,7 +164,6 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
 {
     const size_t numPixels = numRowsSource * numColsSource;
     const size_t imageSizeBytes = numPixels * sizeof(uchar4);
-    //memcpy(h_blendedImg, h_destImg, imageSizeBytes);
 
     // 1. Create the mask
 
@@ -166,7 +185,6 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
             mask[index] = !white;
         }
     }
-
 
     // 2. Compute interior and border regions of the mask.
 
@@ -198,12 +216,26 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
 
     // 3 & 4: Split into colour channels.
 
-    vector<float> channelRed;
-    channelRed.resize(numPixels);
-    vector<float> channelGreen;
-    channelGreen.resize(numPixels);
-    vector<float> channelBlue;
-    channelBlue.resize(numPixels);
+    vector<float> sourceRed;
+    sourceRed.resize(numPixels);
+    vector<float> sourceGreen;
+    sourceGreen.resize(numPixels);
+    vector<float> sourceBlue;
+    sourceBlue.resize(numPixels);
+
+    vector<float> destRed;
+    destRed.resize(numPixels);
+    vector<float> destGreen;
+    destGreen.resize(numPixels);
+    vector<float> destBlue;
+    destBlue.resize(numPixels);
+
+    vector<float> blendedRed;
+    blendedRed.resize(numPixels);
+    vector<float> blendedGreen;
+    blendedGreen.resize(numPixels);
+    vector<float> blendedBlue;
+    blendedBlue.resize(numPixels);
 
     for (unsigned int row = 0; row < numRowsSource; row++)
     {
@@ -216,44 +248,51 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
             const unsigned char green = pixel.y;
             const unsigned char blue = pixel.z;
 
-            channelRed[index]   = red;
-            channelGreen[index] = green;
-            channelBlue[index]  = blue;
+            blendedRed[index] = red;
+            blendedGreen[index] = green;
+            blendedBlue[index] = blue;
+            sourceRed[index] = red;
+            sourceGreen[index] = green;
+            sourceBlue[index] = blue;
+
+            destRed[index] = h_destImg[index].x;
+            destGreen[index] = h_destImg[index].y;
+            destBlue[index] = h_destImg[index].z;
         }
     }
 
-    vector<float> channelRed2(channelRed);
-    vector<float> channelGreen2(channelGreen);
-    vector<float> channelBlue2(channelBlue);
+    vector<float> blendedRed2(blendedRed);
+    vector<float> blendedGreen2(blendedGreen);
+    vector<float> blendedBlue2(blendedBlue);
 
     // 5. Jacobi calculations
 
-    for (unsigned int iteration = 0; iteration < 1; iteration++)
-    {
-        for (unsigned int row = 0; row < numRowsSource; row++)
-        {
-            for (unsigned int col = 0; col < numColsSource; col++)
-            {
-                const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+    const int numIterations = 800;
 
-                if (mask[index])
-                {
-                    channelRed[index]   = h_sourceImg[index].x;
-                    channelGreen[index] = h_sourceImg[index].y;
-                    channelBlue[index]  = h_sourceImg[index].z;
-                }
-                else
-                {
-                    channelRed[index]   = h_destImg[index].x;
-                    channelGreen[index] = h_destImg[index].y;
-                    channelBlue[index]  = h_destImg[index].z;
-                }
-            }
-        }
+    // Red channel
+    for (unsigned int iteration = 0; iteration < numIterations; iteration++)
+    {
+        newChannelValue(sourceRed, destRed, blendedRed, blendedRed2, numRowsSource, numColsSource, mask, interior, border);
+        blendedRed = blendedRed2;
     }
 
+    // Green channel
+    for (unsigned int iteration = 0; iteration < numIterations; iteration++)
+    {
+        newChannelValue(sourceGreen, destGreen, blendedGreen, blendedGreen2, numRowsSource, numColsSource, mask, interior, border);
+        blendedGreen = blendedGreen2;
+    }
+
+    // Blue channel
+    for (unsigned int iteration = 0; iteration < numIterations; iteration++)
+    {
+        newChannelValue(sourceBlue, destBlue, blendedBlue, blendedBlue2, numRowsSource, numColsSource, mask, interior, border);
+        blendedBlue = blendedBlue2;
+    }
 
     // 6. Create the output image
+
+    memcpy(h_blendedImg, h_destImg, sizeof(uchar4) * numPixels);
 
     for (unsigned int row = 0; row < numRowsSource; row++)
     {
@@ -261,9 +300,12 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
         {
             const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
 
-            h_blendedImg[index].x = channelRed[index];
-            h_blendedImg[index].y = channelGreen[index];
-            h_blendedImg[index].z = channelBlue[index];
+            if (interior[index])
+            {
+                h_blendedImg[index].x = blendedRed[index];
+                h_blendedImg[index].y = blendedGreen[index];
+                h_blendedImg[index].z = blendedBlue[index];
+            }
         }
     }
 
