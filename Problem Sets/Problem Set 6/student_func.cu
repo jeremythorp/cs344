@@ -197,7 +197,6 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
     uchar4* const h_blendedImg) //OUT
 {
     const size_t numPixels = numRowsSource * numColsSource;
-    const size_t imageSizeBytes = numPixels * sizeof(uchar4);
 
     // 1. Create the mask
 
