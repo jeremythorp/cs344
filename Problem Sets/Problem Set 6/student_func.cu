@@ -97,6 +97,7 @@ void newChannelValue
 (
     vector<float> const& sourceChannel,
     vector<float> const& destChannel,
+    vector<float> const& sourceSums,
     vector<float> const& blendedChannel,
     vector<float>& newBlendedChannel,
     const size_t numRowsSource,
@@ -141,16 +142,49 @@ void newChannelValue
                 else
                     borderSum += destChannel[index4];
                 
+                //float sourceSum = 0.0f;
+                //sourceSum += sourceChannel[index] - sourceChannel[index1];
+                //sourceSum += sourceChannel[index] - sourceChannel[index2];
+                //sourceSum += sourceChannel[index] - sourceChannel[index3];
+                //sourceSum += sourceChannel[index] - sourceChannel[index4];
+
+                float newVal = (blendedSum + borderSum + sourceSums[index]) / 4.0f;
+                newVal = std::min(255.0f, std::max(0.0f, newVal));
+
+                newBlendedChannel[index] = newVal;
+            }
+        }
+    }
+}
+
+
+void calcSourceSums
+(
+    vector<float> const& sourceChannel, 
+    vector<float>& sourceSums,
+    const size_t numRowsSource,
+    const size_t numColsSource
+)
+{
+    for (unsigned int row = 0; row < numRowsSource; row++)
+    {
+        for (unsigned int col = 0; col < numColsSource; col++)
+        {
+            if (!isImageEdge(col, row, numRowsSource, numColsSource))
+            {
+                const unsigned int index = calcIndex(col, row, numRowsSource, numColsSource);
+                const unsigned int index1 = calcIndex(col + 1, row, numRowsSource, numColsSource);
+                const unsigned int index2 = calcIndex(col - 1, row, numRowsSource, numColsSource);
+                const unsigned int index3 = calcIndex(col, row + 1, numRowsSource, numColsSource);
+                const unsigned int index4 = calcIndex(col, row - 1, numRowsSource, numColsSource);
+
                 float sourceSum = 0.0f;
                 sourceSum += sourceChannel[index] - sourceChannel[index1];
                 sourceSum += sourceChannel[index] - sourceChannel[index2];
                 sourceSum += sourceChannel[index] - sourceChannel[index3];
                 sourceSum += sourceChannel[index] - sourceChannel[index4];
 
-                float newVal = (blendedSum + borderSum + sourceSum) / 4.0f;
-                newVal = std::min(255.0f, std::max(0.0f, newVal));
-
-                newBlendedChannel[index] = newVal;
+                sourceSums[index] = sourceSum;
             }
         }
     }
@@ -273,26 +307,37 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
 
     // 5. Jacobi calculations
 
+    vector<float> sourceSumsRed;
+    sourceSumsRed.resize(numPixels);
+    vector<float> sourceSumsGreen;
+    sourceSumsGreen.resize(numPixels);
+    vector<float> sourceSumsBlue;
+    sourceSumsBlue.resize(numPixels);
+
+    calcSourceSums(sourceRed,   sourceSumsRed,   numRowsSource, numColsSource);
+    calcSourceSums(sourceGreen, sourceSumsGreen, numRowsSource, numColsSource);
+    calcSourceSums(sourceBlue,  sourceSumsBlue,  numRowsSource, numColsSource);
+    
     const int numIterations = 800;
 
     // Red channel
     for (unsigned int iteration = 0; iteration < numIterations; iteration++)
     {
-        newChannelValue(sourceRed, destRed, blendedRed, blendedRed2, numRowsSource, numColsSource, mask, interior, border);
+        newChannelValue(sourceRed, destRed, sourceSumsRed, blendedRed, blendedRed2, numRowsSource, numColsSource, mask, interior, border);
         blendedRed = blendedRed2;
     }
 
     // Green channel
     for (unsigned int iteration = 0; iteration < numIterations; iteration++)
     {
-        newChannelValue(sourceGreen, destGreen, blendedGreen, blendedGreen2, numRowsSource, numColsSource, mask, interior, border);
+        newChannelValue(sourceGreen, destGreen, sourceSumsGreen, blendedGreen, blendedGreen2, numRowsSource, numColsSource, mask, interior, border);
         blendedGreen = blendedGreen2;
     }
 
     // Blue channel
     for (unsigned int iteration = 0; iteration < numIterations; iteration++)
     {
-        newChannelValue(sourceBlue, destBlue, blendedBlue, blendedBlue2, numRowsSource, numColsSource, mask, interior, border);
+        newChannelValue(sourceBlue, destBlue, sourceSumsBlue, blendedBlue, blendedBlue2, numRowsSource, numColsSource, mask, interior, border);
         blendedBlue = blendedBlue2;
     }
 
