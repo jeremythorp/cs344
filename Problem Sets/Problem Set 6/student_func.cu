@@ -1,6 +1,11 @@
 //Udacity HW 6
 //Poisson Blending
 
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include "utils.h"
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 #include <vector>
 #include <algorithm>
 
@@ -69,8 +74,6 @@ using namespace std;
 
 
 
-#include "utils.h"
-#include <thrust/host_vector.h>
 
 void reference_calc(const uchar4* const h_sourceImg,
     const size_t numRowsSource, const size_t numColsSource,
@@ -93,18 +96,24 @@ bool isImageEdge(size_t x, size_t y, size_t numRows, size_t numCols)
 }
 
 
+__device__ bool d_isImageEdge(size_t x, size_t y, size_t numRows, size_t numCols)
+{
+    bool isEdge = (x == 0) || (y == 0) || (x == (numCols - 1)) || (y == (numRows - 1));
+
+    return isEdge;
+}
+
 void newChannelValue
 (
-    vector<float> const& sourceChannel,
-    vector<float> const& destChannel,
-    vector<float> const& sourceSums,
-    vector<float> const& blendedChannel,
-    vector<float>& newBlendedChannel,
+    thrust::host_vector<float> const& destChannel,
+    thrust::host_vector<float> const& sourceSums,
+    thrust::host_vector<float> const& blendedChannel,
+    thrust::host_vector<float>& newBlendedChannel,
     const size_t numRowsSource,
     const size_t numColsSource,
-    vector<bool> const& mask,
-    vector<bool> const& interior,
-    vector<bool> const& border
+    thrust::host_vector<unsigned char> const& mask,
+    thrust::host_vector<unsigned char> const& interior,
+    thrust::host_vector<unsigned char> const& border
 )
 {
     for (unsigned int row = 0; row < numRowsSource; row++)
@@ -142,12 +151,6 @@ void newChannelValue
                 else
                     borderSum += destChannel[index4];
                 
-                //float sourceSum = 0.0f;
-                //sourceSum += sourceChannel[index] - sourceChannel[index1];
-                //sourceSum += sourceChannel[index] - sourceChannel[index2];
-                //sourceSum += sourceChannel[index] - sourceChannel[index3];
-                //sourceSum += sourceChannel[index] - sourceChannel[index4];
-
                 float newVal = (blendedSum + borderSum + sourceSums[index]) / 4.0f;
                 newVal = std::min(255.0f, std::max(0.0f, newVal));
 
@@ -157,11 +160,74 @@ void newChannelValue
     }
 }
 
+__global__
+void newChannelValueGPU
+(
+    float* const d_destChannel,
+    float* const d_sourceSums,
+    float* const d_blendedChannel,
+    float*       d_newBlendedChannel,
+    const  size_t numRowsSource,
+    const  size_t numColsSource,
+    unsigned char* const d_mask,
+    unsigned char* const d_interior,
+    unsigned char* const d_border
+)
+{
+    const int myIndex = blockIdx.x * blockDim.x + threadIdx.x;
+
+    const int numPixels = numRowsSource * numColsSource;
+
+    if (myIndex < numPixels)
+    {
+        int col = threadIdx.x;
+        int row = myIndex / numColsSource;
+
+        if (!d_isImageEdge(col, row, numRowsSource, numColsSource))
+        {
+            const unsigned int index = myIndex;
+            const unsigned int index1 = myIndex + 1;
+            const unsigned int index2 = myIndex - 1;
+            const unsigned int index3 = myIndex + numColsSource;
+            const unsigned int index4 = myIndex - numColsSource;
+
+            float blendedSum = 0.0f;
+            float borderSum = 0.0f;
+
+            if (d_interior[index1])
+                blendedSum += d_blendedChannel[index1];
+            else
+                borderSum += d_destChannel[index1];
+
+            if (d_interior[index2])
+                blendedSum += d_blendedChannel[index2];
+            else
+                borderSum += d_destChannel[index2];
+
+            if (d_interior[index3])
+                blendedSum += d_blendedChannel[index3];
+            else
+                borderSum += d_destChannel[index3];
+
+            if (d_interior[index4])
+                blendedSum += d_blendedChannel[index4];
+            else
+                borderSum += d_destChannel[index4];
+
+            float newVal = (blendedSum + borderSum + d_sourceSums[index]) / 4.0f;
+            newVal = min(255.0f, max(0.0f, newVal));
+
+            d_newBlendedChannel[index] = newVal;
+        }
+    }
+
+}
+
 
 void calcSourceSums
 (
-    vector<float> const& sourceChannel, 
-    vector<float>& sourceSums,
+    thrust::host_vector<float> const& sourceChannel,
+    thrust::host_vector<float>& sourceSums,
     const size_t numRowsSource,
     const size_t numColsSource
 )
@@ -196,11 +262,14 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
     const uchar4* const h_destImg, //IN
     uchar4* const h_blendedImg) //OUT
 {
+    // Check all is ok in CUDA
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
     const size_t numPixels = numRowsSource * numColsSource;
 
     // 1. Create the mask
 
-    vector<bool> mask; // true for 'non-white' pixels
+    thrust::host_vector<unsigned char> mask; // true for 'non-white' pixels
     mask.resize(numPixels);
 
     for (unsigned int row = 0; row < numRowsSource; row++)
@@ -221,9 +290,9 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
 
     // 2. Compute interior and border regions of the mask.
 
-    vector<bool> interior;
+    thrust::host_vector<unsigned char> interior;
     interior.resize(numPixels);
-    vector<bool> border;
+    thrust::host_vector<unsigned char> border;
     border.resize(numPixels);
 
     for (unsigned int row = 0; row < numRowsSource; row++)
@@ -255,25 +324,25 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
 
     // 3 & 4: Split into colour channels.
 
-    vector<float> sourceRed;
+    thrust::host_vector<float> sourceRed;
     sourceRed.resize(numPixels);
-    vector<float> sourceGreen;
+    thrust::host_vector<float> sourceGreen;
     sourceGreen.resize(numPixels);
-    vector<float> sourceBlue;
+    thrust::host_vector<float> sourceBlue;
     sourceBlue.resize(numPixels);
 
-    vector<float> destRed;
+    thrust::host_vector<float> destRed;
     destRed.resize(numPixels);
-    vector<float> destGreen;
+    thrust::host_vector<float> destGreen;
     destGreen.resize(numPixels);
-    vector<float> destBlue;
+    thrust::host_vector<float> destBlue;
     destBlue.resize(numPixels);
 
-    vector<float> blendedRed;
+    thrust::host_vector<float> blendedRed;
     blendedRed.resize(numPixels);
-    vector<float> blendedGreen;
+    thrust::host_vector<float> blendedGreen;
     blendedGreen.resize(numPixels);
-    vector<float> blendedBlue;
+    thrust::host_vector<float> blendedBlue;
     blendedBlue.resize(numPixels);
 
     for (unsigned int row = 0; row < numRowsSource; row++)
@@ -300,48 +369,210 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
         }
     }
 
-    vector<float> blendedRed2(blendedRed);
-    vector<float> blendedGreen2(blendedGreen);
-    vector<float> blendedBlue2(blendedBlue);
+    thrust::host_vector<float> blendedRed2(blendedRed);
+    thrust::host_vector<float> blendedGreen2(blendedGreen);
+    thrust::host_vector<float> blendedBlue2(blendedBlue);
 
     // 5. Jacobi calculations
 
-    vector<float> sourceSumsRed;
+    thrust::host_vector<float> sourceSumsRed;
     sourceSumsRed.resize(numPixels);
-    vector<float> sourceSumsGreen;
+    thrust::host_vector<float> sourceSumsGreen;
     sourceSumsGreen.resize(numPixels);
-    vector<float> sourceSumsBlue;
+    thrust::host_vector<float> sourceSumsBlue;
     sourceSumsBlue.resize(numPixels);
 
     calcSourceSums(sourceRed,   sourceSumsRed,   numRowsSource, numColsSource);
     calcSourceSums(sourceGreen, sourceSumsGreen, numRowsSource, numColsSource);
     calcSourceSums(sourceBlue,  sourceSumsBlue,  numRowsSource, numColsSource);
+
+    // Prepare device values
+
+    const int numThreads = 1024;
+    const int numBlocks = (numPixels + numThreads - 1) / numThreads;
+    const dim3 blockSize(numThreads);
+    const dim3 gridSize(numBlocks);
     
+    //unsigned int floatPixelsAsBytes = numPixels * sizeof(float);
+
+    //float* const d_destChannelRed   = NULL;
+    //float* const d_destChannelGreen = NULL;
+    //float* const d_destChannelBlue  = NULL;
+    //
+    //cudaMalloc((void**)&d_destChannelRed,   floatPixelsAsBytes);
+
+    //// Check all is ok in CUDA
+    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //cudaMalloc((void**)&d_destChannelGreen, floatPixelsAsBytes);
+
+    //// Check all is ok in CUDA
+    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //cudaMalloc((void**)&d_destChannelBlue, floatPixelsAsBytes);
+
+    //// Check all is ok in CUDA
+    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //cudaMemcpy(d_destChannelRed,   &destRed[0],   floatPixelsAsBytes, cudaMemcpyHostToDevice);
+    thrust::device_vector<float> d_destChannelRed   = destRed;
+    thrust::device_vector<float> d_destChannelGreen = destGreen;
+    thrust::device_vector<float> d_destChannelBlue  = destBlue;
+
+    thrust::device_vector<float> d_blendedChannelRed = blendedRed;
+    thrust::device_vector<float> d_blendedChannelGreen = blendedGreen;
+    thrust::device_vector<float> d_blendedChannelBlue = blendedBlue;
+
+    thrust::device_vector<float> d_blendedChannelRed2 = blendedRed;
+    thrust::device_vector<float> d_blendedChannelGreen2 = blendedGreen;
+    thrust::device_vector<float> d_blendedChannelBlue2 = blendedBlue;
+
+    thrust::device_vector<float> d_sourceSumsRed   = sourceSumsRed;
+    thrust::device_vector<float> d_sourceSumsGreen = sourceSumsGreen;
+    thrust::device_vector<float> d_sourceSumsBlue  = sourceSumsBlue;
+
+    thrust::device_vector<unsigned char> d_mask = mask;
+    thrust::device_vector<unsigned char> d_interior = interior;
+    thrust::device_vector<unsigned char> d_border = border;
+
+    // Check all is ok in CUDA
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //cudaMemcpy(d_destChannelGreen, &destGreen[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
+    //
+    //// Check all is ok in CUDA
+    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //cudaMemcpy(d_destChannelBlue, &destBlue[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
+    //
+    //// Check all is ok in CUDA
+    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //float* const d_blendedChannelRed1 = NULL;
+    //float* const d_blendedChannelGreen1 = NULL;
+    //float* const d_blendedChannelBlue1 = NULL;
+    //cudaMalloc((void**)&d_blendedChannelRed1, floatPixelsAsBytes);
+    //cudaMalloc((void**)&d_blendedChannelGreen1, floatPixelsAsBytes);
+    //cudaMalloc((void**)&d_blendedChannelBlue1, floatPixelsAsBytes);
+    //cudaMemcpy(d_blendedChannelRed1,   &blendedRed[0],   floatPixelsAsBytes, cudaMemcpyHostToDevice);
+    //cudaMemcpy(d_blendedChannelGreen1, &blendedGreen[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
+    //cudaMemcpy(d_blendedChannelBlue1,  &blendedBlue[0],  floatPixelsAsBytes, cudaMemcpyHostToDevice);
+
+    //// Check all is ok in CUDA
+    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //float* const d_blendedChannelRed2 = NULL;
+    //float* const d_blendedChannelGreen2 = NULL;
+    //float* const d_blendedChannelBlue2 = NULL;
+    //cudaMalloc((void**)&d_blendedChannelRed2, floatPixelsAsBytes);
+    //cudaMalloc((void**)&d_blendedChannelGreen2, floatPixelsAsBytes);
+    //cudaMalloc((void**)&d_blendedChannelBlue2, floatPixelsAsBytes);
+    //cudaMemcpy(d_blendedChannelRed2, &blendedRed2[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
+    //cudaMemcpy(d_blendedChannelGreen2, &blendedGreen2[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
+    //cudaMemcpy(d_blendedChannelBlue2, &blendedBlue2[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
+
+    //// Check all is ok in CUDA
+    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //float* d_sourceSumsRed = NULL;
+    //cudaMalloc((void**)&d_sourceSumsRed, floatPixelsAsBytes);
+    //cudaMemcpy(d_sourceSumsRed, &sourceSumsRed[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
+
+    //float* d_sourceSumsGreen = NULL;
+    //cudaMalloc((void**)&d_sourceSumsGreen, floatPixelsAsBytes);
+    //cudaMemcpy(d_sourceSumsGreen, &sourceSumsGreen[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
+
+    //float* d_sourceSumsBlue = NULL;
+    //cudaMalloc((void**)&d_sourceSumsBlue, floatPixelsAsBytes);
+    //cudaMemcpy(d_sourceSumsBlue, &sourceSumsBlue[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
+
+    //// Check all is ok in CUDA
+    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    //unsigned char* d_mask = NULL;
+    //unsigned char* d_interior = NULL;
+    //unsigned char* d_border = NULL;
+    //cudaMalloc((void**)&d_mask, numPixels);
+    //cudaMalloc((void**)&d_interior, numPixels);
+    //cudaMalloc((void**)&d_border, numPixels);
+    //cudaMemcpy(d_mask, &mask[0], numPixels, cudaMemcpyHostToDevice);
+    //cudaMemcpy(d_interior, &interior[0], numPixels, cudaMemcpyHostToDevice);
+    //cudaMemcpy(d_border, &border[0], numPixels, cudaMemcpyHostToDevice);
+
+    // Check all is ok in CUDA
+    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+    // Do the iterations
+
     const int numIterations = 800;
 
     // Red channel
     for (unsigned int iteration = 0; iteration < numIterations; iteration++)
     {
-        newChannelValue(sourceRed, destRed, sourceSumsRed, blendedRed, blendedRed2, numRowsSource, numColsSource, mask, interior, border);
-        blendedRed = blendedRed2;
+        //newChannelValue(destRed, sourceSumsRed, blendedRed, blendedRed2, numRowsSource, numColsSource, mask, interior, border);
+        //blendedRed = blendedRed2;
+        newChannelValueGPU << <gridSize, blockSize >> >
+            (
+                thrust::raw_pointer_cast(d_destChannelRed.data()),
+                thrust::raw_pointer_cast(d_sourceSumsRed.data()),
+                thrust::raw_pointer_cast(d_blendedChannelRed.data()),
+                thrust::raw_pointer_cast(d_blendedChannelRed2.data()),
+                numRowsSource, 
+                numColsSource, 
+                thrust::raw_pointer_cast(d_mask.data()),
+                thrust::raw_pointer_cast(d_interior.data()),
+                thrust::raw_pointer_cast(d_border.data())
+            );
+        d_blendedChannelRed = d_blendedChannelRed2;
+        //cudaMemcpy(d_blendedChannelRed1, d_blendedChannelRed2, floatPixelsAsBytes, cudaMemcpyDeviceToDevice);
     }
 
     // Green channel
     for (unsigned int iteration = 0; iteration < numIterations; iteration++)
     {
-        newChannelValue(sourceGreen, destGreen, sourceSumsGreen, blendedGreen, blendedGreen2, numRowsSource, numColsSource, mask, interior, border);
-        blendedGreen = blendedGreen2;
+        newChannelValueGPU << <gridSize, blockSize >> >
+            (
+            thrust::raw_pointer_cast(d_destChannelGreen.data()),
+            thrust::raw_pointer_cast(d_sourceSumsGreen.data()),
+            thrust::raw_pointer_cast(d_blendedChannelGreen.data()),
+            thrust::raw_pointer_cast(d_blendedChannelGreen2.data()),
+            numRowsSource,
+            numColsSource,
+            thrust::raw_pointer_cast(d_mask.data()),
+            thrust::raw_pointer_cast(d_interior.data()),
+            thrust::raw_pointer_cast(d_border.data())
+            );
+        d_blendedChannelGreen = d_blendedChannelGreen2;
+        //newChannelValue(destGreen, sourceSumsGreen, blendedGreen, blendedGreen2, numRowsSource, numColsSource, mask, interior, border);
+        //blendedGreen = blendedGreen2;
     }
 
     // Blue channel
     for (unsigned int iteration = 0; iteration < numIterations; iteration++)
     {
-        newChannelValue(sourceBlue, destBlue, sourceSumsBlue, blendedBlue, blendedBlue2, numRowsSource, numColsSource, mask, interior, border);
-        blendedBlue = blendedBlue2;
+        newChannelValueGPU << <gridSize, blockSize >> >
+            (
+            thrust::raw_pointer_cast(d_destChannelBlue.data()),
+            thrust::raw_pointer_cast(d_sourceSumsBlue.data()),
+            thrust::raw_pointer_cast(d_blendedChannelBlue.data()),
+            thrust::raw_pointer_cast(d_blendedChannelBlue2.data()),
+            numRowsSource,
+            numColsSource,
+            thrust::raw_pointer_cast(d_mask.data()),
+            thrust::raw_pointer_cast(d_interior.data()),
+            thrust::raw_pointer_cast(d_border.data())
+            );
+        d_blendedChannelBlue = d_blendedChannelBlue2;
+        //newChannelValue(destBlue, sourceSumsBlue, blendedBlue, blendedBlue2, numRowsSource, numColsSource, mask, interior, border);
+        //blendedBlue = blendedBlue2;
     }
 
-    // 6. Create the output image
+    blendedRed = d_blendedChannelRed;
+    blendedGreen = d_blendedChannelGreen;
+    blendedBlue = d_blendedChannelBlue;
 
+    // 6. Create the output image
+    
     memcpy(h_blendedImg, h_destImg, sizeof(uchar4) * numPixels);
 
     for (unsigned int row = 0; row < numRowsSource; row++)
@@ -358,6 +589,27 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
             }
         }
     }
+
+    // Free up the CUDA device memory
+
+    //cudaFree(d_sourceSumsRed);
+    //d_sourceSumsRed = NULL;
+    //cudaFree(d_sourceSumsGreen);
+    //d_sourceSumsGreen = NULL;
+    //cudaFree(d_sourceSumsBlue);
+    //d_sourceSumsBlue = NULL;
+    //cudaFree(d_destChannelRed);
+    //cudaFree(d_destChannelGreen);
+    //cudaFree(d_destChannelBlue);
+    //cudaFree(d_blendedChannelRed1);
+    //cudaFree(d_blendedChannelGreen1);
+    //cudaFree(d_blendedChannelBlue1);
+    //cudaFree(d_blendedChannelRed2);
+    //cudaFree(d_blendedChannelGreen2);
+    //cudaFree(d_blendedChannelBlue2);
+    //cudaFree(d_mask);
+    //cudaFree(d_interior);
+    //cudaFree(d_border);
 
 }
 
