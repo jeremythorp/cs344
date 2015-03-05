@@ -180,7 +180,7 @@ void newChannelValueGPU
 
     if (myIndex < numPixels)
     {
-        int col = threadIdx.x;
+        int col = myIndex % numColsSource;
         int row = myIndex / numColsSource;
 
         if (!d_isImageEdge(col, row, numRowsSource, numColsSource))
@@ -257,7 +257,7 @@ void calcSourceSums
 }
 
 
-void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
+void your_blend(const bool use_gpu, const uchar4* const h_sourceImg,  //IN
     const size_t numRowsSource, const size_t numColsSource,
     const uchar4* const h_destImg, //IN
     uchar4* const h_blendedImg) //OUT
@@ -393,28 +393,6 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
     const dim3 blockSize(numThreads);
     const dim3 gridSize(numBlocks);
     
-    //unsigned int floatPixelsAsBytes = numPixels * sizeof(float);
-
-    //float* const d_destChannelRed   = NULL;
-    //float* const d_destChannelGreen = NULL;
-    //float* const d_destChannelBlue  = NULL;
-    //
-    //cudaMalloc((void**)&d_destChannelRed,   floatPixelsAsBytes);
-
-    //// Check all is ok in CUDA
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-    //cudaMalloc((void**)&d_destChannelGreen, floatPixelsAsBytes);
-
-    //// Check all is ok in CUDA
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-    //cudaMalloc((void**)&d_destChannelBlue, floatPixelsAsBytes);
-
-    //// Check all is ok in CUDA
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-    //cudaMemcpy(d_destChannelRed,   &destRed[0],   floatPixelsAsBytes, cudaMemcpyHostToDevice);
     thrust::device_vector<float> d_destChannelRed   = destRed;
     thrust::device_vector<float> d_destChannelGreen = destGreen;
     thrust::device_vector<float> d_destChannelBlue  = destBlue;
@@ -438,138 +416,98 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
     // Check all is ok in CUDA
     cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-    //cudaMemcpy(d_destChannelGreen, &destGreen[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
-    //
-    //// Check all is ok in CUDA
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-    //cudaMemcpy(d_destChannelBlue, &destBlue[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
-    //
-    //// Check all is ok in CUDA
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-    //float* const d_blendedChannelRed1 = NULL;
-    //float* const d_blendedChannelGreen1 = NULL;
-    //float* const d_blendedChannelBlue1 = NULL;
-    //cudaMalloc((void**)&d_blendedChannelRed1, floatPixelsAsBytes);
-    //cudaMalloc((void**)&d_blendedChannelGreen1, floatPixelsAsBytes);
-    //cudaMalloc((void**)&d_blendedChannelBlue1, floatPixelsAsBytes);
-    //cudaMemcpy(d_blendedChannelRed1,   &blendedRed[0],   floatPixelsAsBytes, cudaMemcpyHostToDevice);
-    //cudaMemcpy(d_blendedChannelGreen1, &blendedGreen[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
-    //cudaMemcpy(d_blendedChannelBlue1,  &blendedBlue[0],  floatPixelsAsBytes, cudaMemcpyHostToDevice);
-
-    //// Check all is ok in CUDA
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-    //float* const d_blendedChannelRed2 = NULL;
-    //float* const d_blendedChannelGreen2 = NULL;
-    //float* const d_blendedChannelBlue2 = NULL;
-    //cudaMalloc((void**)&d_blendedChannelRed2, floatPixelsAsBytes);
-    //cudaMalloc((void**)&d_blendedChannelGreen2, floatPixelsAsBytes);
-    //cudaMalloc((void**)&d_blendedChannelBlue2, floatPixelsAsBytes);
-    //cudaMemcpy(d_blendedChannelRed2, &blendedRed2[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
-    //cudaMemcpy(d_blendedChannelGreen2, &blendedGreen2[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
-    //cudaMemcpy(d_blendedChannelBlue2, &blendedBlue2[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
-
-    //// Check all is ok in CUDA
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-    //float* d_sourceSumsRed = NULL;
-    //cudaMalloc((void**)&d_sourceSumsRed, floatPixelsAsBytes);
-    //cudaMemcpy(d_sourceSumsRed, &sourceSumsRed[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
-
-    //float* d_sourceSumsGreen = NULL;
-    //cudaMalloc((void**)&d_sourceSumsGreen, floatPixelsAsBytes);
-    //cudaMemcpy(d_sourceSumsGreen, &sourceSumsGreen[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
-
-    //float* d_sourceSumsBlue = NULL;
-    //cudaMalloc((void**)&d_sourceSumsBlue, floatPixelsAsBytes);
-    //cudaMemcpy(d_sourceSumsBlue, &sourceSumsBlue[0], floatPixelsAsBytes, cudaMemcpyHostToDevice);
-
-    //// Check all is ok in CUDA
-    //cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-    //unsigned char* d_mask = NULL;
-    //unsigned char* d_interior = NULL;
-    //unsigned char* d_border = NULL;
-    //cudaMalloc((void**)&d_mask, numPixels);
-    //cudaMalloc((void**)&d_interior, numPixels);
-    //cudaMalloc((void**)&d_border, numPixels);
-    //cudaMemcpy(d_mask, &mask[0], numPixels, cudaMemcpyHostToDevice);
-    //cudaMemcpy(d_interior, &interior[0], numPixels, cudaMemcpyHostToDevice);
-    //cudaMemcpy(d_border, &border[0], numPixels, cudaMemcpyHostToDevice);
-
-    // Check all is ok in CUDA
-    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
     // Do the iterations
 
     const int numIterations = 800;
 
+
+
     // Red channel
     for (unsigned int iteration = 0; iteration < numIterations; iteration++)
     {
-        //newChannelValue(destRed, sourceSumsRed, blendedRed, blendedRed2, numRowsSource, numColsSource, mask, interior, border);
-        //blendedRed = blendedRed2;
-        newChannelValueGPU << <gridSize, blockSize >> >
-            (
+        if (use_gpu)
+        {
+            newChannelValueGPU << <gridSize, blockSize >> >
+                (
                 thrust::raw_pointer_cast(d_destChannelRed.data()),
                 thrust::raw_pointer_cast(d_sourceSumsRed.data()),
                 thrust::raw_pointer_cast(d_blendedChannelRed.data()),
                 thrust::raw_pointer_cast(d_blendedChannelRed2.data()),
-                numRowsSource, 
-                numColsSource, 
+                numRowsSource,
+                numColsSource,
                 thrust::raw_pointer_cast(d_mask.data()),
                 thrust::raw_pointer_cast(d_interior.data()),
                 thrust::raw_pointer_cast(d_border.data())
-            );
-        d_blendedChannelRed = d_blendedChannelRed2;
+                );
+            d_blendedChannelRed = d_blendedChannelRed2;
+        }
+        else
+        {
+            newChannelValue(destRed, sourceSumsRed, blendedRed, blendedRed2, numRowsSource, numColsSource, mask, interior, border);
+            blendedRed = blendedRed2;
+        }
+
         //cudaMemcpy(d_blendedChannelRed1, d_blendedChannelRed2, floatPixelsAsBytes, cudaMemcpyDeviceToDevice);
     }
 
     // Green channel
     for (unsigned int iteration = 0; iteration < numIterations; iteration++)
     {
-        newChannelValueGPU << <gridSize, blockSize >> >
-            (
-            thrust::raw_pointer_cast(d_destChannelGreen.data()),
-            thrust::raw_pointer_cast(d_sourceSumsGreen.data()),
-            thrust::raw_pointer_cast(d_blendedChannelGreen.data()),
-            thrust::raw_pointer_cast(d_blendedChannelGreen2.data()),
-            numRowsSource,
-            numColsSource,
-            thrust::raw_pointer_cast(d_mask.data()),
-            thrust::raw_pointer_cast(d_interior.data()),
-            thrust::raw_pointer_cast(d_border.data())
-            );
-        d_blendedChannelGreen = d_blendedChannelGreen2;
-        //newChannelValue(destGreen, sourceSumsGreen, blendedGreen, blendedGreen2, numRowsSource, numColsSource, mask, interior, border);
-        //blendedGreen = blendedGreen2;
+        if (use_gpu)
+        {
+            newChannelValueGPU << <gridSize, blockSize >> >
+                (
+                thrust::raw_pointer_cast(d_destChannelGreen.data()),
+                thrust::raw_pointer_cast(d_sourceSumsGreen.data()),
+                thrust::raw_pointer_cast(d_blendedChannelGreen.data()),
+                thrust::raw_pointer_cast(d_blendedChannelGreen2.data()),
+                numRowsSource,
+                numColsSource,
+                thrust::raw_pointer_cast(d_mask.data()),
+                thrust::raw_pointer_cast(d_interior.data()),
+                thrust::raw_pointer_cast(d_border.data())
+                );
+            d_blendedChannelGreen = d_blendedChannelGreen2;
+        }
+        else
+        {
+            newChannelValue(destGreen, sourceSumsGreen, blendedGreen, blendedGreen2, numRowsSource, numColsSource, mask, interior, border);
+            blendedGreen = blendedGreen2;
+        }
     }
 
     // Blue channel
     for (unsigned int iteration = 0; iteration < numIterations; iteration++)
     {
-        newChannelValueGPU << <gridSize, blockSize >> >
-            (
-            thrust::raw_pointer_cast(d_destChannelBlue.data()),
-            thrust::raw_pointer_cast(d_sourceSumsBlue.data()),
-            thrust::raw_pointer_cast(d_blendedChannelBlue.data()),
-            thrust::raw_pointer_cast(d_blendedChannelBlue2.data()),
-            numRowsSource,
-            numColsSource,
-            thrust::raw_pointer_cast(d_mask.data()),
-            thrust::raw_pointer_cast(d_interior.data()),
-            thrust::raw_pointer_cast(d_border.data())
-            );
-        d_blendedChannelBlue = d_blendedChannelBlue2;
-        //newChannelValue(destBlue, sourceSumsBlue, blendedBlue, blendedBlue2, numRowsSource, numColsSource, mask, interior, border);
-        //blendedBlue = blendedBlue2;
+        if (use_gpu)
+        {
+            newChannelValueGPU << <gridSize, blockSize >> >
+                (
+                thrust::raw_pointer_cast(d_destChannelBlue.data()),
+                thrust::raw_pointer_cast(d_sourceSumsBlue.data()),
+                thrust::raw_pointer_cast(d_blendedChannelBlue.data()),
+                thrust::raw_pointer_cast(d_blendedChannelBlue2.data()),
+                numRowsSource,
+                numColsSource,
+                thrust::raw_pointer_cast(d_mask.data()),
+                thrust::raw_pointer_cast(d_interior.data()),
+                thrust::raw_pointer_cast(d_border.data())
+                );
+            d_blendedChannelBlue = d_blendedChannelBlue2;
+        }
+        else
+        {
+            newChannelValue(destBlue, sourceSumsBlue, blendedBlue, blendedBlue2, numRowsSource, numColsSource, mask, interior, border);
+            blendedBlue = blendedBlue2;
+        }
     }
 
-    blendedRed = d_blendedChannelRed;
-    blendedGreen = d_blendedChannelGreen;
-    blendedBlue = d_blendedChannelBlue;
+    if (use_gpu)
+    {
+        blendedRed = d_blendedChannelRed;
+        blendedGreen = d_blendedChannelGreen;
+        blendedBlue = d_blendedChannelBlue;
+    }
 
     // 6. Create the output image
     
@@ -591,25 +529,6 @@ void your_blend_cpu(const uchar4* const h_sourceImg,  //IN
     }
 
     // Free up the CUDA device memory
-
-    //cudaFree(d_sourceSumsRed);
-    //d_sourceSumsRed = NULL;
-    //cudaFree(d_sourceSumsGreen);
-    //d_sourceSumsGreen = NULL;
-    //cudaFree(d_sourceSumsBlue);
-    //d_sourceSumsBlue = NULL;
-    //cudaFree(d_destChannelRed);
-    //cudaFree(d_destChannelGreen);
-    //cudaFree(d_destChannelBlue);
-    //cudaFree(d_blendedChannelRed1);
-    //cudaFree(d_blendedChannelGreen1);
-    //cudaFree(d_blendedChannelBlue1);
-    //cudaFree(d_blendedChannelRed2);
-    //cudaFree(d_blendedChannelGreen2);
-    //cudaFree(d_blendedChannelBlue2);
-    //cudaFree(d_mask);
-    //cudaFree(d_interior);
-    //cudaFree(d_border);
 
 }
 
@@ -658,6 +577,8 @@ void your_blend(const uchar4* const h_sourceImg,  //IN
       to catch any errors that happened while executing the kernel.
   */
 
-    your_blend_cpu(h_sourceImg, numRowsSource, numColsSource, h_destImg, h_blendedImg);
+    const bool use_gpu = true;
+
+    your_blend(use_gpu, h_sourceImg, numRowsSource, numColsSource, h_destImg, h_blendedImg);
     //reference_calc(h_sourceImg, numRowsSource, numColsSource, h_destImg, h_blendedImg);
 }
